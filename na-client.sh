@@ -576,6 +576,45 @@ run_frpc() {
     fi
 }
 
+# ===== QUẢN LÝ MIRROR CÀI ĐẶT =====
+_optimize_package_mirrors() {
+    echo -e "${YELLOW}Đang tìm và cấu hình Mirror phần mềm gần máy chủ nhất...${NC}"
+    if [[ "$(uname)" == "Linux" ]]; then
+        if grep -qi "ubuntu" /etc/os-release 2>/dev/null; then
+            if ! command -v curl >/dev/null 2>&1; then
+                sudo apt-get update >/dev/null 2>&1
+                sudo apt-get install -y curl >/dev/null 2>&1
+            fi
+            
+            # Lấy mã quốc gia của VPS hiện tại (Ví dụ: vn, sg, us)
+            CC=$(curl -s --max-time 5 "http://ip-api.com/line/?fields=countryCode" | tr '[:upper:]' '[:lower:]')
+            
+            if [[ -n "$CC" && "$CC" =~ ^[a-z]{2}$ ]]; then
+                echo -e "   [Ubuntu] Phát hiện vị trí VPS: ${CYAN}${CC^^}${NC} -> Chuyển sang Mirror ${CC}.archive.ubuntu.com"
+                sudo sed -i -E "s|http://([a-z]{2}\.)?archive\.ubuntu\.com/ubuntu/?|http://${CC}.archive.ubuntu.com/ubuntu/|g" /etc/apt/sources.list
+                sudo apt-get update >/dev/null 2>&1 || true
+            fi
+        elif grep -qi "debian" /etc/os-release 2>/dev/null; then
+            echo -e "   [Debian] Chuyển đổi sang hệ thống phân phối Cloudflare (deb.debian.org)..."
+            sudo sed -i -E 's|http://(ftp\.[a-z]{2}\.|ftp\.)debian\.org/debian/?|http://deb.debian.org/debian/|g' /etc/apt/sources.list
+            sudo apt-get update >/dev/null 2>&1 || true
+        elif command -v dnf >/dev/null 2>&1; then
+            echo -e "   [CentOS/RHEL/Alma] Kích hoạt cấu hình DNF FastestMirror..."
+            if [ -f /etc/dnf/dnf.conf ]; then
+                sudo sed -i '/^fastestmirror/d' /etc/dnf/dnf.conf
+                echo "fastestmirror=True" | sudo tee -a /etc/dnf/dnf.conf >/dev/null
+            fi
+        elif command -v yum >/dev/null 2>&1; then
+            echo -e "   [CentOS 7] Kích hoạt YUM FastestMirror plugin..."
+            sudo yum install -y yum-plugin-fastestmirror >/dev/null 2>&1 || true
+            if [ -f /etc/yum.conf ]; then
+                sudo sed -i '/^plugins=/d' /etc/yum.conf
+                echo "plugins=1" | sudo tee -a /etc/yum.conf >/dev/null
+            fi
+        fi
+    fi
+}
+
 # ===== INSTALL NODEJS & PM2 =====
 _ensure_basic_tools() {
     if ! command -v curl >/dev/null 2>&1 || ! command -v wget >/dev/null 2>&1 || ! command -v tar >/dev/null 2>&1; then
@@ -595,6 +634,7 @@ _ensure_basic_tools() {
 
 install_nodejs_pm2() {
     echo -e "\n${CYAN}--- CÀI ĐẶT NODE.JS & PM2 ---${NC}"
+    _optimize_package_mirrors
     _ensure_basic_tools
     
     if command -v pm2 >/dev/null 2>&1; then
