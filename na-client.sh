@@ -207,81 +207,34 @@ list_domains() {
     ' "$FRPC_CONF"
 }
 
-# ===== ADD DOMAIN =====
-add_domain() {
+# ===== ADD DOMAIN HTTP =====
+add_domain_http() {
     while true; do
         clear
         list_domains
-        echo -e "\n${CYAN}--- THÊM PROXY / DOMAIN MỚI ---${NC}"
-        echo -e "${YELLOW}(Để trống + Enter để quay lại Menu chính)${NC}"
-        echo -e "1. HTTP (Dành cho Web / Domain)"
-        echo -e "2. TCP  (Dành cho SSH / Database / Game...)"
+        echo -e "\n${CYAN}--- THÊM DOMAIN MỚI (HTTP) ---${NC}"
+        echo -e "${YELLOW}(Để trống + Enter để quay lại)${NC}"
 
-        read -p "Chọn loại kết nối (1 hoặc 2): " p_type
-        [[ -z "$p_type" ]] && break
+        read -p "Nhập Domain: " domain
+        [[ -z "$domain" ]] && break
+        
+        if grep -q "\"$domain\"" "$FRPC_CONF"; then
+            echo -e "${RED}❌ Domain [$domain] đã tồn tại!${NC}"
+            read -n 1 -s -r
+            continue
+        fi
+        
+        read -p "Nhập Port local: " port
+        [[ -z "$port" ]] && continue
 
-        if [[ "$p_type" == "2" ]]; then
-            read -p "Nhập Port local (VD: 22): " port
-            [[ -z "$port" ]] && continue
-            read -p "Nhập Remote Port (Enter = random): " remote_port
-
-            if [[ -z "$remote_port" ]]; then
-                while true; do
-                    remote_port=$((RANDOM % 40000 + 10000))
-                    if ! grep -q "remotePort = $remote_port" "$FRPC_CONF"; then
-                        break
-                    fi
-                done
-                echo -e "${YELLOW}Đã tạo ngẫu nhiên Remote Port: ${CYAN}$remote_port${NC}"
-            elif grep -q "remotePort = $remote_port" "$FRPC_CONF"; then
-                echo -e "${RED}❌ Remote Port [$remote_port] đã tồn tại!${NC}"
-                read -n 1 -s -r
-                continue
-            fi
-
-            cat >> "$FRPC_CONF" <<EOL
-
-[[proxies]]
-name = "tcp_${port}_${remote_port}"
-type = "tcp"
-localIP = "127.0.0.1"
-localPort = $port
-remotePort = $remote_port
-EOL
-            echo -e "${GREEN}✔ Đã thêm Proxy TCP (Local: $port → FRP: $remote_port)${NC}"
-
-            # Gọi API mở port
-            SERVER_IP=$(grep -E "^serverAddr" "$FRPC_CONF" | cut -d'"' -f2)
-            API_PORT=$(grep -E "^# API_PORT=" "$FRPC_CONF" | cut -d'=' -f2)
-            API_TOKEN=$(grep -E "^# API_TOKEN=" "$FRPC_CONF" | cut -d'=' -f2)
-            if [[ -n "$SERVER_IP" && -n "$API_PORT" && -n "$API_TOKEN" ]]; then
-                echo -e "${YELLOW}Đang yêu cầu Server mở port qua API...${NC}"
-                curl -s -X POST -d "token=$API_TOKEN&port=$remote_port&action=add_port" "http://$SERVER_IP:$API_PORT"
-            fi
-
-            reload_frpc
-
-        elif [[ "$p_type" == "1" ]]; then
-            read -p "Nhập Domain: " domain
-            [[ -z "$domain" ]] && continue
-            
-            if grep -q "\"$domain\"" "$FRPC_CONF"; then
-                echo -e "${RED}❌ Domain [$domain] đã tồn tại!${NC}"
-                read -n 1 -s -r
-                continue
-            fi
-            
-            read -p "Nhập Port local: " port
-            [[ -z "$port" ]] && continue
-
-            if grep -q "localPort = $port" "$FRPC_CONF" && grep -q "type = \"http\"" "$FRPC_CONF"; then
-                if [[ "$OSTYPE" == "darwin"* ]]; then
-                    sed -i '' "/localPort = $port/,/customDomains/ s/\]/,\"$domain\"\]/" "$FRPC_CONF"
-                else
-                    sed -i "/localPort = $port/,/customDomains/ s/\]/,\"$domain\"\]/" "$FRPC_CONF"
-                fi
+        if grep -q "localPort = $port" "$FRPC_CONF" && grep -q "type = \"http\"" "$FRPC_CONF"; then
+            if [[ "$OSTYPE" == "darwin"* ]]; then
+                sed -i '' "/localPort = $port/,/customDomains/ s/\]/,\"$domain\"\]/" "$FRPC_CONF"
             else
-                cat >> "$FRPC_CONF" <<EOL
+                sed -i "/localPort = $port/,/customDomains/ s/\]/,\"$domain\"\]/" "$FRPC_CONF"
+            fi
+        else
+            cat >> "$FRPC_CONF" <<EOL
 
 [[proxies]]
 name = "proxy_$port"
@@ -290,25 +243,100 @@ localIP = "127.0.0.1"
 localPort = $port
 customDomains = ["$domain"]
 EOL
-            fi
-
-            echo -e "${GREEN}✔ Đã thêm domain [$domain] (port $port)${NC}"
-
-            # Gọi API thêm domain
-            SERVER_IP=$(grep -E "^serverAddr" "$FRPC_CONF" | cut -d'"' -f2)
-            API_PORT=$(grep -E "^# API_PORT=" "$FRPC_CONF" | cut -d'=' -f2)
-            API_TOKEN=$(grep -E "^# API_TOKEN=" "$FRPC_CONF" | cut -d'=' -f2)
-            if [[ -n "$SERVER_IP" && -n "$API_PORT" && -n "$API_TOKEN" ]]; then
-                echo -e "${YELLOW}Đang đồng bộ domain lên Server...${NC}"
-                curl -s -X POST -d "token=$API_TOKEN&domain=$domain" "http://$SERVER_IP:$API_PORT"
-            fi
-            reload_frpc
-        else
-            echo -e "${RED}❌ Lựa chọn không hợp lệ!${NC}"
         fi
+
+        echo -e "${GREEN}✔ Đã thêm domain [$domain] (port $port)${NC}"
+
+        # Gọi API thêm domain
+        SERVER_IP=$(grep -E "^serverAddr" "$FRPC_CONF" | cut -d'"' -f2)
+        API_PORT=$(grep -E "^# API_PORT=" "$FRPC_CONF" | cut -d'=' -f2)
+        API_TOKEN=$(grep -E "^# API_TOKEN=" "$FRPC_CONF" | cut -d'=' -f2)
+        if [[ -n "$SERVER_IP" && -n "$API_PORT" && -n "$API_TOKEN" ]]; then
+            echo -e "${YELLOW}Đang đồng bộ domain lên Server...${NC}"
+            curl -s -X POST -d "token=$API_TOKEN&domain=$domain" "http://$SERVER_IP:$API_PORT" >/dev/null 2>&1
+        fi
+        reload_frpc
         
         echo -e "\n${CYAN}Nhấn phím bất kỳ để tiếp tục thêm...${NC}"
         read -n 1 -s -r
+    done
+}
+
+# ===== ADD DOMAIN TCP =====
+add_domain_tcp() {
+    while true; do
+        clear
+        list_domains
+        echo -e "\n${CYAN}--- MỞ PORT MỚI (TCP) ---${NC}"
+        echo -e "${YELLOW}(Để trống + Enter để quay lại)${NC}"
+
+        read -p "Nhập Port local (VD: 22): " port
+        [[ -z "$port" ]] && break
+        read -p "Nhập Remote Port (Enter = random): " remote_port
+
+        if [[ -z "$remote_port" ]]; then
+            while true; do
+                remote_port=$((RANDOM % 40000 + 10000))
+                if ! grep -q "remotePort = $remote_port" "$FRPC_CONF"; then
+                    break
+                fi
+            done
+            echo -e "${YELLOW}Đã tạo ngẫu nhiên Remote Port: ${CYAN}$remote_port${NC}"
+        elif grep -q "remotePort = $remote_port" "$FRPC_CONF"; then
+            echo -e "${RED}❌ Remote Port [$remote_port] đã tồn tại!${NC}"
+            read -n 1 -s -r
+            continue
+        fi
+
+        cat >> "$FRPC_CONF" <<EOL
+
+[[proxies]]
+name = "tcp_${port}_${remote_port}"
+type = "tcp"
+localIP = "127.0.0.1"
+localPort = $port
+remotePort = $remote_port
+EOL
+        echo -e "${GREEN}✔ Đã thêm Proxy TCP (Local: $port → FRP: $remote_port)${NC}"
+
+        # Gọi API mở port
+        SERVER_IP=$(grep -E "^serverAddr" "$FRPC_CONF" | cut -d'"' -f2)
+        API_PORT=$(grep -E "^# API_PORT=" "$FRPC_CONF" | cut -d'=' -f2)
+        API_TOKEN=$(grep -E "^# API_TOKEN=" "$FRPC_CONF" | cut -d'=' -f2)
+        if [[ -n "$SERVER_IP" && -n "$API_PORT" && -n "$API_TOKEN" ]]; then
+            echo -e "${YELLOW}Đang yêu cầu Server mở port qua API...${NC}"
+            curl -s -X POST -d "token=$API_TOKEN&port=$remote_port&action=add_port" "http://$SERVER_IP:$API_PORT" >/dev/null 2>&1
+        fi
+
+        reload_frpc
+        
+        echo -e "\n${CYAN}Nhấn phím bất kỳ để tiếp tục thêm...${NC}"
+        read -n 1 -s -r
+    done
+}
+
+# ===== DOMAIN MENU =====
+domain_menu() {
+    while true; do
+        clear
+        echo -e "${CYAN}====================================================${NC}"
+        echo -e "${YELLOW}           🌐 QUẢN LÝ DOMAIN & PORT${NC}"
+        echo -e "${CYAN}====================================================${NC}"
+        echo -e "   ${YELLOW}1.${NC} Xem danh sách (Nhập key để xóa)"
+        echo -e "   ${YELLOW}2.${NC} Thêm Domain (HTTP)"
+        echo -e "   ${YELLOW}3.${NC} Mở Port (TCP)"
+        echo -e "${CYAN}----------------------------------------------------${NC}"
+        echo -e "   ${YELLOW}0.${NC} Quay lại Menu chính"
+        echo -e "${CYAN}====================================================${NC}"
+        
+        read -p " ➔ Chọn: " dmc
+        case $dmc in
+            1) delete_domain ;;
+            2) add_domain_http ;;
+            3) add_domain_tcp ;;
+            0) break ;;
+            *) echo -e "${RED}❌ Không hợp lệ!${NC}"; sleep 1 ;;
+        esac
     done
 }
 
@@ -317,8 +345,8 @@ delete_domain() {
     while true; do
         clear
         list_domains
-        echo -e "\n${CYAN}--- XÓA PROXY / DOMAIN ---${NC}"
-        echo -e "${YELLOW}Nhập Domain hoặc Port local cần xóa (Enter để thoát)${NC}"
+        echo -e "\n${CYAN}--- TÙY CHỌN DÀNH CHO DANH SÁCH ---${NC}"
+        echo -e "${YELLOW}Nhập Domain hoặc Port local cần xóa (Để trống + Enter để Thoát)${NC}"
         
         read -p "Nhập: " input
         [[ -z "$input" ]] && break
@@ -1259,6 +1287,187 @@ docker_menu() {
     done
 }
 
+# ===== BẢO MẬT: QUẢN LÝ USER =====
+security_user_management() {
+    while true; do
+        clear
+        echo -e "${CYAN}====================================================${NC}"
+        echo -e "${YELLOW}           👤 QUẢN LÝ USER HỆ THỐNG${NC}"
+        echo -e "${CYAN}====================================================${NC}"
+        echo -e "   ${YELLOW}1.${NC} Thêm User mới"
+        echo -e "   ${YELLOW}2.${NC} Xóa User"
+        echo -e "   ${YELLOW}3.${NC} Đổi mật khẩu User"
+        echo -e "   ${YELLOW}4.${NC} Gán quyền Root (Sudo) cho User"
+        echo -e "   ${YELLOW}5.${NC} Tạo SSH Key truy cập cho User"
+        echo -e "${CYAN}----------------------------------------------------${NC}"
+        echo -e "   ${YELLOW}0.${NC} Quay lại Menu Bảo mật"
+        echo -e "${CYAN}====================================================${NC}"
+        
+        read -p " ➔ Chọn: " uc
+        case $uc in
+            1)
+                read -p "Nhập username mới: " un
+                if [ -n "$un" ]; then
+                    sudo useradd -m -s /bin/bash "$un" && sudo passwd "$un"
+                    echo -e "${GREEN}✔ Đã thêm user $un${NC}"
+                fi
+                echo ""; read -n 1 -s -r -p "Nhấn phím bất kỳ..."
+                ;;
+            2)
+                read -p "Nhập username cần xóa: " un
+                if [ -n "$un" ]; then
+                    read -p "Xác nhận xóa user $un và toàn bộ thư mục home? (y/N): " conf
+                    if [[ "$conf" =~ ^[Yy]$ ]]; then
+                        sudo userdel -r "$un"
+                        echo -e "${GREEN}✔ Đã xóa user $un${NC}"
+                    fi
+                fi
+                echo ""; read -n 1 -s -r -p "Nhấn phím bất kỳ..."
+                ;;
+            3)
+                read -p "Nhập username cần đổi mật khẩu: " un
+                if [ -n "$un" ]; then
+                    sudo passwd "$un"
+                fi
+                echo ""; read -n 1 -s -r -p "Nhấn phím bất kỳ..."
+                ;;
+            4)
+                read -p "Nhập username cần cấp quyền Root: " un
+                if [ -n "$un" ]; then
+                    if grep -q -i "debian\|ubuntu" /etc/os-release 2>/dev/null; then
+                        sudo usermod -aG sudo "$un"
+                    else
+                        sudo usermod -aG wheel "$un"
+                    fi
+                    echo -e "${GREEN}✔ Đã thêm $un vào nhóm quản trị.${NC}"
+                fi
+                echo ""; read -n 1 -s -r -p "Nhấn phím bất kỳ..."
+                ;;
+            5)
+                echo -e "\n${CYAN}--- TẠO & HƯỚNG DẪN SỬ DỤNG SSH KEY ---${NC}"
+                read -p "Nhập username để tạo SSH Key: " un
+                if [ -n "$un" ]; then
+                    if ! id "$un" >/dev/null 2>&1; then
+                        echo -e "${RED}❌ User $un không tồn tại! Vui lòng tạo user trước (Chọn mục 1 trong menu).${NC}"
+                    else
+                        USER_HOME=$(getent passwd "$un" | cut -d: -f6)
+                        if [ -z "$USER_HOME" ]; then
+                            USER_HOME="/home/$un"
+                        fi
+                        sudo mkdir -p "$USER_HOME/.ssh"
+                        sudo chown "$un:$un" "$USER_HOME/.ssh"
+                        sudo chmod 700 "$USER_HOME/.ssh"
+                        
+                        KEY_TMP="/tmp/${un}_ed25519"
+                        sudo rm -f "$KEY_TMP" "${KEY_TMP}.pub"
+                        sudo -u "$un" ssh-keygen -t ed25519 -f "$KEY_TMP" -N "" -q
+                        
+                        sudo cat "${KEY_TMP}.pub" >> "$USER_HOME/.ssh/authorized_keys"
+                        sudo chown "$un:$un" "$USER_HOME/.ssh/authorized_keys"
+                        sudo chmod 600 "$USER_HOME/.ssh/authorized_keys"
+                        
+                        echo -e "\n${GREEN}✔ Đã tạo SSH Key cho $un. Public key đã được lưu vào server.${NC}"
+                        echo -e "${YELLOW}Dưới đây là Private Key. HÃY COPY TOÀN BỘ KHỐI SAU (bao gồm dòng BEGIN và END):${NC}"
+                        echo -e "${CYAN}=========================================================================================${NC}"
+                        sudo cat "$KEY_TMP"
+                        echo -e "${CYAN}=========================================================================================${NC}"
+                        
+                        echo -e "\n${YELLOW}💡 HƯỚNG DẪN SỬ DỤNG KHÓA NÀY ĐỂ ĐĂNG NHẬP:${NC}"
+                        echo -e " ${GREEN}* Trên Mac/Linux:${NC}"
+                        echo -e "   1. Lưu đoạn Private Key trên vào một file, ví dụ: ${CYAN}~/.ssh/${un}_key${NC}"
+                        echo -e "   2. Phân quyền chuẩn cho file: ${CYAN}chmod 600 ~/.ssh/${un}_key${NC}"
+                        echo -e "   3. Lệnh đăng nhập: ${CYAN}ssh -i ~/.ssh/${un}_key $un@<IP_SERVER>${NC}"
+                        echo -e "\n ${GREEN}* Trên Windows (Termius, PuTTY, MobaXterm):${NC}"
+                        echo -e "   - Tạo kết nối mới (New Host)."
+                        echo -e "   - Nhập Username: ${CYAN}$un${NC}"
+                        echo -e "   - Phần Authentication > Chọn Key (hoặc SSH Key)."
+                        echo -e "   - Dán toàn bộ Private Key đã copy ở trên vào phần Key."
+                        
+                        sudo rm -f "$KEY_TMP" "${KEY_TMP}.pub"
+                    fi
+                fi
+                echo ""; read -n 1 -s -r -p "Nhấn phím bất kỳ..."
+                ;;
+            0) break ;;
+            *) echo -e "${RED}❌ Lựa chọn không hợp lệ!${NC}"; sleep 1 ;;
+        esac
+    done
+}
+
+# ===== BẢO MẬT: BẢO MẬT SSH =====
+security_ssh_config() {
+    clear
+    echo -e "${CYAN}====================================================${NC}"
+    echo -e "${YELLOW}           🛡️ BẢO MẬT KẾT NỐI SSH${NC}"
+    echo -e "${CYAN}====================================================${NC}"
+    echo -e "${RED}⚠ CẢNH BÁO NGUY HIỂM: BẠN CÓ THỂ BỊ KHÓA KHỎI SERVER!${NC}"
+    echo -e "Chức năng này sẽ: "
+    echo -e " - ${RED}Tắt${NC} đăng nhập bằng tài khoản root"
+    echo -e " - ${RED}Tắt${NC} đăng nhập bằng mật khẩu (bắt buộc dùng SSH Key)"
+    echo -e ""
+    echo -e "HÃY CHẮC CHẮN RẰNG:"
+    echo -e "1. Bạn đã có tài khoản user phụ (không phải root)"
+    echo -e "2. User phụ đó đã được cài SSH Key (Bạn có Private Key)"
+    echo -e "3. User phụ đó có quyền sudo/root."
+    echo -e "${CYAN}----------------------------------------------------${NC}"
+    read -p "Bạn có CHẮC CHẮN muốn thực hiện tiếp? (Thử gõ CHOT_DONE để đồng ý): " confirm
+    
+    if [ "$confirm" = "CHOT_DONE" ]; then
+        echo -e "\n${YELLOW}Đang cấu hình SSH...${NC}"
+        SSHD_CONF="/etc/ssh/sshd_config"
+        if [ ! -f "$SSHD_CONF" ]; then
+            echo -e "${RED}❌ Không tìm thấy file $SSHD_CONF${NC}"
+            echo ""; read -n 1 -s -r -p "Nhấn phím bất kỳ..."
+            return
+        fi
+
+        sudo cp "$SSHD_CONF" "${SSHD_CONF}.bak"
+        
+        # Sửa cấu hình
+        sudo sed -i 's/^#*PermitRootLogin.*/PermitRootLogin no/g' "$SSHD_CONF"
+        sudo sed -i 's/^#*PasswordAuthentication.*/PasswordAuthentication no/g' "$SSHD_CONF"
+        # Bật PubkeyAuthentication nếu bị tắt
+        sudo sed -i 's/^#*PubkeyAuthentication.*/PubkeyAuthentication yes/g' "$SSHD_CONF"
+        
+        # Khởi động lại dịch vụ SSH
+        if systemctl is-active --quiet sshd; then
+            sudo systemctl restart sshd
+        elif systemctl is-active --quiet ssh; then
+            sudo systemctl restart ssh
+        fi
+
+        echo -e "${GREEN}✔ Đã vô hiệu hóa login Root và Mật khẩu.${NC}"
+        echo -e "${GREEN}✔ SSH đã được khởi động lại.${NC}"
+        echo -e "${YELLOW}Lưu ý: Không đóng màn hình SSH hiện tại cho đến khi bạn test login thành công ở cửa sổ mới!${NC}"
+    else
+        echo -e "${RED}❌ Đã hủy thao tác để đảm bảo an toàn.${NC}"
+    fi
+    echo ""; read -n 1 -s -r -p "Nhấn phím bất kỳ để tiếp tục..."
+}
+
+# ===== BẢO MẬT: MENU CHÍNH =====
+security_menu() {
+    while true; do
+        clear
+        echo -e "${CYAN}====================================================${NC}"
+        echo -e "${YELLOW}               🛡️ BẢO MẬT HỆ THỐNG${NC}"
+        echo -e "${CYAN}====================================================${NC}"
+        echo -e "   ${YELLOW}1.${NC} Quản lý User (Thêm/Xóa/Đổi Pass/Cấp Sudo/Tạo SSH Key)"
+        echo -e "   ${YELLOW}2.${NC} Cấu hình Bảo mật SSH (Tắt login Root & Password)"
+        echo -e "${CYAN}----------------------------------------------------${NC}"
+        echo -e "   ${YELLOW}0.${NC} Quay lại Menu chính"
+        echo -e "${CYAN}====================================================${NC}"
+        
+        read -p " ➔ Chọn: " sec
+        case $sec in
+            1) security_user_management ;;
+            2) security_ssh_config ;;
+            0) break ;;
+            *) echo -e "${RED}❌ Không hợp lệ!${NC}"; sleep 1 ;;
+        esac
+    done
+}
+
 # ===== SHOW MENU =====
 show_menu() {
     clear
@@ -1291,9 +1500,9 @@ show_menu() {
     echo -e "   ${YELLOW}1.${NC} Cài đặt FRPC"
     echo -e "   ${YELLOW}2.${NC} Cấu hình FRPC"
     echo -e "   ${YELLOW}3.${NC} Khởi động hoặc Restart FRPC (Có check kết nối)"
-    echo -e "   ${YELLOW}4.${NC} Thêm Domain / Mở Port"
-    echo -e "   ${YELLOW}5.${NC} Xem danh sách Domain / Port"
-    echo -e "   ${YELLOW}6.${NC} Quản lý Docker & Container"
+    echo -e "   ${YELLOW}4.${NC} Quản lý Domain & Port"
+    echo -e "   ${YELLOW}5.${NC} Quản lý Docker & Container"
+    echo -e "   ${YELLOW}6.${NC} Bảo mật Hệ thống (User & SSH)"
     echo -e "${CYAN}----------------------------------------------------${NC}"
     echo -e "   ${YELLOW}0.${NC} Thoát"
     echo -e "${CYAN}====================================================${NC}"
@@ -1308,9 +1517,9 @@ while true; do
         1) install_frp; echo ""; read -n 1 -s -r -p "Nhấn phím bất kỳ...";;
         2) config_server; echo ""; read -n 1 -s -r -p "Nhấn phím bất kỳ...";;
         3) run_frpc; test_connection; echo ""; read -n 1 -s -r -p "Nhấn phím bất kỳ...";;
-        4) add_domain ;;
-        5) list_domains; echo ""; read -n 1 -s -r -p "Nhấn phím bất kỳ để tiếp tục...";;
-        6) docker_menu ;;
+        4) domain_menu ;;
+        5) docker_menu ;;
+        6) security_menu ;;
         0) 
             echo -e "\n${GREEN}Tạm biệt! Chúc bạn dùng FRP vui vẻ.${NC}\n"
             exit 0 
