@@ -554,6 +554,8 @@ run_frpc() {
     pm2 delete "$PM2_NAME" >/dev/null 2>&1
     pm2 start "$(which frpc)" --name "$PM2_NAME" -- -c "$FRPC_CONF" >/dev/null 2>&1
     pm2 save >/dev/null 2>&1
+    
+    sudo env PATH=$PATH:$(dirname $(which node)) $(which pm2) startup systemd -u ${USER:-$(whoami)} --hp ${HOME} >/dev/null 2>&1 || true
 
     sleep 2
     
@@ -574,22 +576,41 @@ run_frpc() {
     fi
 }
 
+# ===== INSTALL NODEJS & PM2 =====
+install_nodejs_pm2() {
+    echo -e "\n${CYAN}--- CÀI ĐẶT NODE.JS & PM2 ---${NC}"
+    if command -v pm2 >/dev/null 2>&1; then
+        echo -e "${GREEN}✔ Node.js và PM2 đã được cài đặt!${NC}"
+        sudo env PATH=$PATH:$(dirname $(which node)) $(which pm2) startup systemd -u ${USER:-$(whoami)} --hp ${HOME} >/dev/null 2>&1 || true
+        pm2 save >/dev/null 2>&1
+        echo -e "${GREEN}✔ Đã cấu hình PM2 khởi động cùng hệ thống.${NC}"
+        return
+    fi
+    echo -e "${YELLOW}Đang cài Node.js và PM2...${NC}"
+    if [[ "$(uname)" == "Linux" ]]; then
+        curl -fsSL https://deb.nodesource.com/setup_current.x | sudo -E bash -
+        sudo apt install -y nodejs
+    elif [[ "$(uname)" == "Darwin" ]] && command -v brew >/dev/null; then
+        brew install node
+    else
+        echo -e "${RED}Không hỗ trợ tự động cài Node.js trên hệ thống này.${NC}"
+        return
+    fi
+    sudo npm install -g pm2
+    
+    echo -e "${YELLOW}Đang cấu hình PM2 khởi động cùng hệ thống...${NC}"
+    sudo env PATH=$PATH:$(dirname $(which node)) $(which pm2) startup systemd -u ${USER:-$(whoami)} --hp ${HOME} >/dev/null 2>&1 || true
+    pm2 save >/dev/null 2>&1
+    echo -e "${GREEN}✔ Cài đặt và cấu hình thành công!${NC}"
+}
+
 # ===== INSTALL FRP =====
 install_frp() {
-    echo -e "\n${CYAN}--- CÀI ĐẶT FRPC TỰ ĐỘNG ---${NC}"
+    echo -e "\n${CYAN}--- CÀI ĐẶT FRPC CORE ---${NC}"
 
     if ! command -v pm2 >/dev/null 2>&1; then
-        echo -e "${YELLOW}Đang cài Node.js và PM2...${NC}"
-        if [[ "$(uname)" == "Linux" ]]; then
-            curl -fsSL https://deb.nodesource.com/setup_current.x | sudo -E bash -
-            sudo apt install -y nodejs
-        elif [[ "$(uname)" == "Darwin" ]] && command -v brew >/dev/null; then
-            brew install node
-        else
-            echo -e "${RED}Không hỗ trợ tự động cài Node.js trên hệ thống này.${NC}"
-            return
-        fi
-        sudo npm install -g pm2
+        echo -e "${RED}❌ Chưa cài đặt PM2. Vui lòng chọn mục 1 trước.${NC}"
+        return
     fi
 
     LATEST_VERSION=$(curl -s https://api.github.com/repos/fatedier/frp/releases/latest | grep '"tag_name":' | sed -E 's/.*"v([^"]+)".*/\1/')
@@ -1497,12 +1518,13 @@ show_menu() {
 
     echo -e "${CYAN}----------------------------------------------------${NC}"
     
-    echo -e "   ${YELLOW}1.${NC} Cài đặt FRPC"
-    echo -e "   ${YELLOW}2.${NC} Cấu hình FRPC"
-    echo -e "   ${YELLOW}3.${NC} Khởi động hoặc Restart FRPC (Có check kết nối)"
-    echo -e "   ${YELLOW}4.${NC} Quản lý Domain & Port"
-    echo -e "   ${YELLOW}5.${NC} Quản lý Docker & Container"
-    echo -e "   ${YELLOW}6.${NC} Bảo mật Hệ thống (User & SSH)"
+    echo -e "   ${YELLOW}1.${NC} Cài đặt Node.js & PM2"
+    echo -e "   ${YELLOW}2.${NC} Cài đặt FRPC Core"
+    echo -e "   ${YELLOW}3.${NC} Cấu hình FRPC"
+    echo -e "   ${YELLOW}4.${NC} Khởi động hoặc Restart FRPC (Có check kết nối)"
+    echo -e "   ${YELLOW}5.${NC} Quản lý Domain & Port"
+    echo -e "   ${YELLOW}6.${NC} Quản lý Docker & Container"
+    echo -e "   ${YELLOW}7.${NC} Bảo mật Hệ thống (User & SSH)"
     echo -e "${CYAN}----------------------------------------------------${NC}"
     echo -e "   ${YELLOW}0.${NC} Thoát"
     echo -e "${CYAN}====================================================${NC}"
@@ -1514,12 +1536,13 @@ while true; do
     read -p " ➔ Nhập lựa chọn của bạn: " c
 
     case $c in
-        1) install_frp; echo ""; read -n 1 -s -r -p "Nhấn phím bất kỳ...";;
-        2) config_server; echo ""; read -n 1 -s -r -p "Nhấn phím bất kỳ...";;
-        3) run_frpc; test_connection; echo ""; read -n 1 -s -r -p "Nhấn phím bất kỳ...";;
-        4) domain_menu ;;
-        5) docker_menu ;;
-        6) security_menu ;;
+        1) install_nodejs_pm2; echo ""; read -n 1 -s -r -p "Nhấn phím bất kỳ...";;
+        2) install_frp; echo ""; read -n 1 -s -r -p "Nhấn phím bất kỳ...";;
+        3) config_server; echo ""; read -n 1 -s -r -p "Nhấn phím bất kỳ...";;
+        4) run_frpc; test_connection; echo ""; read -n 1 -s -r -p "Nhấn phím bất kỳ...";;
+        5) domain_menu ;;
+        6) docker_menu ;;
+        7) security_menu ;;
         0) 
             echo -e "\n${GREEN}Tạm biệt! Chúc bạn dùng FRP vui vẻ.${NC}\n"
             exit 0 
