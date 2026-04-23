@@ -577,8 +577,26 @@ run_frpc() {
 }
 
 # ===== INSTALL NODEJS & PM2 =====
+_ensure_basic_tools() {
+    if ! command -v curl >/dev/null 2>&1 || ! command -v wget >/dev/null 2>&1 || ! command -v tar >/dev/null 2>&1; then
+        echo -e "${YELLOW}Đang cài đặt các thư viện phụ thuộc cơ bản (curl, wget, tar)...${NC}"
+        if [[ "$(uname)" == "Linux" ]]; then
+            if command -v apt-get >/dev/null 2>&1; then
+                sudo apt-get update >/dev/null 2>&1
+                sudo apt-get install -y curl wget tar >/dev/null 2>&1
+            elif command -v yum >/dev/null 2>&1; then
+                sudo yum install -y curl wget tar >/dev/null 2>&1
+            elif command -v dnf >/dev/null 2>&1; then
+                sudo dnf install -y curl wget tar >/dev/null 2>&1
+            fi
+        fi
+    fi
+}
+
 install_nodejs_pm2() {
     echo -e "\n${CYAN}--- CÀI ĐẶT NODE.JS & PM2 ---${NC}"
+    _ensure_basic_tools
+    
     if command -v pm2 >/dev/null 2>&1; then
         echo -e "${GREEN}✔ Node.js và PM2 đã được cài đặt!${NC}"
         sudo env PATH=$PATH:$(dirname $(which node)) $(which pm2) startup systemd -u ${USER:-$(whoami)} --hp ${HOME} >/dev/null 2>&1 || true
