@@ -487,22 +487,65 @@ config_server() {
         return
     fi
 
-    echo -e "\n${CYAN}(Nhấn Enter để giữ nguyên giá trị cũ)${NC}"
-    
-    read -p "Server IP [$cur_ip]: " ip
-    ip=${ip:-$cur_ip}
-    
-    read -p "FRP Bind Port [$cur_port]: " port
-    port=${port:-$cur_port}
-    
-    read -p "Token [$cur_token]: " token
-    token=${token:-$cur_token}
-    
-    read -p "API Port [$cur_api_port]: " api_port
-    api_port=${api_port:-$cur_api_port}
-    
-    read -p "API Token [$cur_api_token]: " api_token
-    api_token=${api_token:-$cur_api_token}
+    while true; do
+        echo -e "\n${CYAN}Chọn phương thức nhập thông tin:${NC}"
+        echo -e " ${YELLOW}1.${NC} Nhập thủ công từng mục"
+        echo -e " ${YELLOW}2.${NC} Dán chuỗi nhanh (IP|FRP_Port|FRP_Token|API_Port|API_Token)"
+        echo -e " ${YELLOW}0.${NC} Quay lại"
+        
+        read -p " ➔ Chọn (1/2/0) [0]: " input_method
+        input_method=${input_method:-0}
+
+        if [[ "$input_method" == "0" ]]; then
+            return
+        elif [[ "$input_method" == "2" ]]; then
+            echo -e "\n${YELLOW}Dán chuỗi kết nối vào bên dưới:${NC}"
+            read -p "Chuỗi kết nối (Để trống = Quay lại): " conn_string
+            if [[ -z "$conn_string" ]]; then
+                echo -e "${RED}❌ Chuỗi không được để trống! Quay lại chọn phương thức...${NC}"
+                continue
+            else
+                IFS='|' read -r ip port token api_port api_token <<< "$conn_string"
+                if [[ -z "$ip" || -z "$port" || -z "$token" || -z "$api_port" || -z "$api_token" ]]; then
+                    echo -e "${RED}❌ Sai định dạng! Yêu cầu: IP|FRP_Port|FRP_Token|API_Port|API_Token${NC}"
+                    echo -e "${YELLOW}Quay lại chọn phương thức...${NC}"
+                    continue
+                else
+                    # Cắt khoảng trắng 2 đầu nếu có
+                    ip=$(echo "$ip" | xargs)
+                    port=$(echo "$port" | xargs)
+                    token=$(echo "$token" | xargs)
+                    api_port=$(echo "$api_port" | xargs)
+                    api_token=$(echo "$api_token" | xargs)
+                    echo -e "${GREEN}✔ Đã phân tích chuỗi thành công!${NC}"
+                    break
+                fi
+            fi
+        elif [[ "$input_method" == "1" ]]; then
+            break
+        else
+            echo -e "${RED}❌ Lựa chọn không hợp lệ, vui lòng chọn lại.${NC}"
+        fi
+    done
+
+    if [[ "$input_method" == "1" ]]; then
+        echo -e "\n${CYAN}(Nhấn Enter để giữ nguyên giá trị cũ)${NC}"
+        
+        read -p "Server IP [$cur_ip]: " ip
+        ip=${ip:-$cur_ip}
+        
+        read -p "FRP Bind Port [$cur_port]: " port
+        port=${port:-$cur_port}
+        
+        read -p "Token [$cur_token]: " token
+        token=${token:-$cur_token}
+        
+        read -p "API Port [$cur_api_port]: " api_port
+        api_port=${api_port:-$cur_api_port}
+        
+        read -p "API Token [$cur_api_token]: " api_token
+        api_token=${api_token:-$cur_api_token}
+    fi
 
     # Sao lưu phần proxies
     sed -n '/\[\[proxies\]\]/,$p' "$FRPC_CONF" > /tmp/frpc_proxies.tmp 2>/dev/null || true
