@@ -633,7 +633,8 @@ _optimize_package_mirrors() {
             CC=$(curl -s --max-time 5 "http://ip-api.com/line/?fields=countryCode" | tr '[:upper:]' '[:lower:]')
             
             if [[ -n "$CC" && "$CC" =~ ^[a-z]{2}$ ]]; then
-                echo -e "   [Ubuntu] Phát hiện vị trí VPS: ${CYAN}${CC^^}${NC} -> Chuyển sang Mirror ${CC}.archive.ubuntu.com"
+                CC_UPPER=$(echo "$CC" | tr '[:lower:]' '[:upper:]')
+                echo -e "   [Ubuntu] Phát hiện vị trí VPS: ${CYAN}${CC_UPPER}${NC} -> Chuyển sang Mirror ${CC}.archive.ubuntu.com"
                 sudo sed -i -E "s|http://([a-z]{2}\.)?archive\.ubuntu\.com/ubuntu/?|http://${CC}.archive.ubuntu.com/ubuntu/|g" /etc/apt/sources.list
                 sudo apt-get update >/dev/null 2>&1 || true
             fi
@@ -717,16 +718,17 @@ install_frp() {
     LATEST_VERSION=$(curl -s https://api.github.com/repos/fatedier/frp/releases/latest | grep '"tag_name":' | sed -E 's/.*"v([^"]+)".*/\1/')
     [ -z "$LATEST_VERSION" ] && LATEST_VERSION="0.61.0"
 
-    OS=$(uname)
+    OS_TYPE=$(uname | tr '[:upper:]' '[:lower:]')
     ARCH=$(uname -m)
-    if [[ "$OS" == "Darwin" ]]; then
-        FILE="frp_${LATEST_VERSION}_darwin_${ARCH/arm64/arm64}"
-    else
-        FILE="frp_${LATEST_VERSION}_linux_${ARCH/x86_64/amd64}"
-    fi
-    if [[ "$ARCH" == "aarch64" || "$ARCH" == "arm64" ]]; then
-        FILE="frp_${LATEST_VERSION}_${OS,,}_arm64"
-    fi
+
+    case $ARCH in
+        x86_64)        ARCH_FRP="amd64" ;;
+        aarch64|arm64) ARCH_FRP="arm64" ;;
+        i386|i686)     ARCH_FRP="386" ;;
+        *)             ARCH_FRP=$ARCH ;;
+    esac
+
+    FILE="frp_${LATEST_VERSION}_${OS_TYPE}_${ARCH_FRP}"
 
     URL="https://github.com/fatedier/frp/releases/download/v${LATEST_VERSION}/${FILE}.tar.gz"
 
