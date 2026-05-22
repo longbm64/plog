@@ -635,7 +635,12 @@ _optimize_package_mirrors() {
             if [[ -n "$CC" && "$CC" =~ ^[a-z]{2}$ ]]; then
                 CC_UPPER=$(echo "$CC" | tr '[:lower:]' '[:upper:]')
                 echo -e "   [Ubuntu] Phát hiện vị trí VPS: ${CYAN}${CC_UPPER}${NC} -> Chuyển sang Mirror ${CC}.archive.ubuntu.com"
-                sudo sed -i -E "s|http://([a-z]{2}\.)?archive\.ubuntu\.com/ubuntu/?|http://${CC}.archive.ubuntu.com/ubuntu/|g" /etc/apt/sources.list
+                # Ubuntu 24.04+ dùng DEB822 format (.sources), các bản cũ dùng .list
+                if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then
+                    sudo sed -i -E "s|http://([a-z]{2}\.)?archive\.ubuntu\.com/ubuntu/?|http://${CC}.archive.ubuntu.com/ubuntu/|g" /etc/apt/sources.list.d/ubuntu.sources
+                elif [ -f /etc/apt/sources.list ]; then
+                    sudo sed -i -E "s|http://([a-z]{2}\.)?archive\.ubuntu\.com/ubuntu/?|http://${CC}.archive.ubuntu.com/ubuntu/|g" /etc/apt/sources.list
+                fi
                 sudo apt-get update >/dev/null 2>&1 || true
             fi
         elif grep -qi "debian" /etc/os-release 2>/dev/null; then
@@ -791,15 +796,83 @@ install_docker() {
 
     echo -e "${YELLOW}Đang cài đặt Docker...${NC}"
     if [[ "$(uname)" == "Linux" ]]; then
-        curl -fsSL https://get.docker.com | sh
-        sudo systemctl enable docker
+        # Xác định distro (ubuntu, debian, centos, fedora...)
+        if [ -f /etc/os-release ]; then
+            . /etc/os-release
+            DISTRO_ID="$ID"
+        else
+            DISTRO_ID="unknown"
+        fi
+
+        if command -v apt-get >/dev/null 2>&1; then
+            # === Debian/Ubuntu: Cài qua APT Repository chính thức ===
+            # (get.docker.com script bị lỗi trên Ubuntu 24.04+)
+
+            # Bước 1: Gỡ các package xung đột
+            echo -e "${YELLOW}Bước 1/4: Gỡ các package Docker cũ/xung đột...${NC}"
+            for pkg in docker.io docker-doc docker-compose docker-compose-v2 podman-docker containerd runc; do
+                sudo apt-get remove -y "$pkg" >/dev/null 2>&1 || true
+            done
+
+            # Bước 2: Cài dependencies và thêm GPG key
+            echo -e "${YELLOW}Bước 2/4: Thêm Docker GPG key...${NC}"
+            sudo apt-get update >/dev/null 2>&1
+            sudo apt-get install -y ca-certificates curl >/dev/null 2>&1
+            sudo install -m 0755 -d /etc/apt/keyrings
+            sudo curl -fsSL "https://download.docker.com/linux/${DISTRO_ID}/gpg" -o /etc/apt/keyrings/docker.asc
+            sudo chmod a+r /etc/apt/keyrings/docker.asc
+
+            # Bước 3: Thêm Docker APT repository
+            echo -e "${YELLOW}Bước 3/4: Cấu hình Docker repository...${NC}"
+            echo \
+              "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/${DISTRO_ID} \
+              $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
+              sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+            sudo apt-get update >/dev/null 2>&1
+
+            # Bước 4: Cài Docker Engine
+            echo -e "${YELLOW}Bước 4/4: Cài đặt Docker Engine...${NC}"
+            sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+
+        elif command -v dnf >/dev/null 2>&1; then
+            # === Fedora / RHEL 8+ / CentOS Stream ===
+            sudo dnf remove -y docker docker-client docker-client-latest docker-common \
+                docker-latest docker-latest-logrotate docker-logrotate docker-engine >/dev/null 2>&1 || true
+            sudo dnf install -y dnf-plugins-core >/dev/null 2>&1
+            sudo dnf config-manager --add-repo https://download.docker.com/linux/${DISTRO_ID}/docker-ce.repo 2>/dev/null || \
+                sudo dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+            sudo dnf install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+
+        elif command -v yum >/dev/null 2>&1; then
+            # === CentOS 7 ===
+            sudo yum remove -y docker docker-client docker-client-latest docker-common \
+                docker-latest docker-latest-logrotate docker-logrotate docker-engine >/dev/null 2>&1 || true
+            sudo yum install -y yum-utils >/dev/null 2>&1
+            sudo yum-config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+            sudo yum install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+
+        else
+            echo -e "${RED}❌ Không nhận diện được package manager (apt/dnf/yum).${NC}"
+            return 1
+        fi
+
+        # Khởi động và enable Docker service
+        sudo systemctl enable docker >/dev/null 2>&1
         sudo systemctl start docker
+
         # Thêm user hiện tại vào group docker (không cần sudo mỗi lần)
         REAL_USER="${SUDO_USER:-$USER}"
         sudo usermod -aG docker "$REAL_USER"
-        echo -e "${GREEN}✔ Cài đặt Docker thành công!${NC}"
+
+        # Kiểm tra cài đặt thành công
+        if command -v docker >/dev/null 2>&1 && sudo docker run --rm hello-world >/dev/null 2>&1; then
+            DOCKER_VER=$(docker --version | sed 's/Docker version //' | cut -d',' -f1)
+            echo -e "${GREEN}✔ Cài đặt Docker v${DOCKER_VER} thành công!${NC}"
+        else
+            echo -e "${GREEN}✔ Cài đặt Docker thành công!${NC}"
+        fi
         echo -e "${YELLOW}ℹ User '$REAL_USER' đã được thêm vào group docker.${NC}"
-        echo -e "${YELLOW}  Hãy logout và login lại để chạy docker không cần sudo.${NC}"
+        echo -e "${YELLOW}  Hãy logout và login lại (hoặc chạy 'newgrp docker') để dùng docker không cần sudo.${NC}"
     elif [[ "$(uname)" == "Darwin" ]]; then
         echo -e "${YELLOW}Trên macOS, vui lòng tải Docker Desktop từ:${NC}"
         echo -e "${CYAN}https://www.docker.com/products/docker-desktop${NC}"
@@ -1519,54 +1592,166 @@ security_user_management() {
 }
 
 # ===== BẢO MẬT: BẢO MẬT SSH =====
-security_ssh_config() {
-    clear
-    echo -e "${CYAN}====================================================${NC}"
-    echo -e "${YELLOW}           🛡️ BẢO MẬT KẾT NỐI SSH${NC}"
-    echo -e "${CYAN}====================================================${NC}"
-    echo -e "${RED}⚠ CẢNH BÁO NGUY HIỂM: BẠN CÓ THỂ BỊ KHÓA KHỎI SERVER!${NC}"
-    echo -e "Chức năng này sẽ: "
-    echo -e " - ${RED}Tắt${NC} đăng nhập bằng tài khoản root"
-    echo -e " - ${RED}Tắt${NC} đăng nhập bằng mật khẩu (bắt buộc dùng SSH Key)"
-    echo -e ""
-    echo -e "HÃY CHẮC CHẮN RẰNG:"
-    echo -e "1. Bạn đã có tài khoản user phụ (không phải root)"
-    echo -e "2. User phụ đó đã được cài SSH Key (Bạn có Private Key)"
-    echo -e "3. User phụ đó có quyền sudo/root."
-    echo -e "${CYAN}----------------------------------------------------${NC}"
-    read -p "Bạn có CHẮC CHẮN muốn thực hiện tiếp? (Thử gõ CHOT_DONE để đồng ý): " confirm
-    
-    if [ "$confirm" = "CHOT_DONE" ]; then
-        echo -e "\n${YELLOW}Đang cấu hình SSH...${NC}"
-        SSHD_CONF="/etc/ssh/sshd_config"
-        if [ ! -f "$SSHD_CONF" ]; then
-            echo -e "${RED}❌ Không tìm thấy file $SSHD_CONF${NC}"
-            echo ""; read -n 1 -s -r -p "Nhấn phím bất kỳ..."
-            return
-        fi
-
-        sudo cp "$SSHD_CONF" "${SSHD_CONF}.bak"
-        
-        # Sửa cấu hình
-        sudo sed -i 's/^#*PermitRootLogin.*/PermitRootLogin no/g' "$SSHD_CONF"
-        sudo sed -i 's/^#*PasswordAuthentication.*/PasswordAuthentication no/g' "$SSHD_CONF"
-        # Bật PubkeyAuthentication nếu bị tắt
-        sudo sed -i 's/^#*PubkeyAuthentication.*/PubkeyAuthentication yes/g' "$SSHD_CONF"
-        
-        # Khởi động lại dịch vụ SSH
-        if systemctl is-active --quiet sshd; then
-            sudo systemctl restart sshd
-        elif systemctl is-active --quiet ssh; then
-            sudo systemctl restart ssh
-        fi
-
-        echo -e "${GREEN}✔ Đã vô hiệu hóa login Root và Mật khẩu.${NC}"
-        echo -e "${GREEN}✔ SSH đã được khởi động lại.${NC}"
-        echo -e "${YELLOW}Lưu ý: Không đóng màn hình SSH hiện tại cho đến khi bạn test login thành công ở cửa sổ mới!${NC}"
-    else
-        echo -e "${RED}❌ Đã hủy thao tác để đảm bảo an toàn.${NC}"
+_setup_fail2ban() {
+    echo -e "\n${YELLOW}Đang cài đặt và cấu hình Fail2ban bảo vệ chống brute-force mật khẩu...${NC}"
+    if command -v apt-get >/dev/null 2>&1; then
+        sudo apt-get update >/dev/null 2>&1
+        sudo apt-get install -y fail2ban >/dev/null 2>&1
+    elif command -v dnf >/dev/null 2>&1; then
+        sudo dnf install -y epel-release >/dev/null 2>&1
+        sudo dnf install -y fail2ban >/dev/null 2>&1
+    elif command -v yum >/dev/null 2>&1; then
+        sudo yum install -y epel-release >/dev/null 2>&1
+        sudo yum install -y fail2ban >/dev/null 2>&1
     fi
-    echo ""; read -n 1 -s -r -p "Nhấn phím bất kỳ để tiếp tục..."
+
+    if command -v fail2ban-client >/dev/null 2>&1; then
+        # Cấu hình fail2ban cho sshd
+        sudo tee /etc/fail2ban/jail.local > /dev/null <<EOF
+[sshd]
+enabled = true
+port = ssh
+filter = sshd
+logpath = %(sshd_log)s
+backend = %(sshd_backend)s
+maxretry = 5
+findtime = 600
+bantime = 3600
+EOF
+        sudo systemctl enable fail2ban >/dev/null 2>&1
+        sudo systemctl restart fail2ban >/dev/null 2>&1
+        echo -e "${GREEN}✔ Đã cài đặt và cấu hình Fail2ban bảo vệ SSH!${NC}"
+        echo -e "${YELLOW}   (IP nhập sai pass 5 lần trong 10 phút sẽ bị khóa 1 tiếng)${NC}"
+    else
+        echo -e "${RED}⚠ Không thể cài đặt Fail2ban tự động. Vui lòng kiểm tra lại package manager.${NC}"
+    fi
+}
+
+security_ssh_config() {
+    SSHD_CONF="/etc/ssh/sshd_config"
+    if [ ! -f "$SSHD_CONF" ]; then
+        echo -e "${RED}❌ Không tìm thấy file cấu hình SSH tại $SSHD_CONF${NC}"
+        echo ""; read -n 1 -s -r -p "Nhấn phím bất kỳ..."
+        return
+    fi
+
+    while true; do
+        clear
+        echo -e "${CYAN}====================================================${NC}"
+        echo -e "${YELLOW}           🛡️ CẤU HÌNH BẢO MẬT SSH${NC}"
+        echo -e "${CYAN}====================================================${NC}"
+        echo -e "   ${YELLOW}1.${NC} Bảo mật Tiêu chuẩn (Khuyên dùng - Vẫn cho phép Login bằng Mật khẩu)"
+        echo -e "      - Tắt đăng nhập trực tiếp tài khoản root (an toàn hơn)"
+        echo -e "      - Vẫn cho phép đăng nhập bằng Mật khẩu & SSH Key"
+        echo -e "      - Giới hạn số lần nhập sai mật khẩu (MaxAuthTries=3)"
+        echo -e "      - Tự động ngắt kết nối khi treo máy (ClientAliveInterval=300)"
+        echo -e "      - Tùy chọn cài Fail2ban chống brute-force"
+        echo ""
+        echo -e "   ${YELLOW}2.${NC} Bảo mật Tối đa (Tắt login Mật khẩu, bắt buộc dùng SSH Key)"
+        echo -e "      - Tắt đăng nhập trực tiếp tài khoản root"
+        echo -e "      - Vô hiệu hóa Mật khẩu hoàn toàn (PasswordAuthentication no)"
+        echo -e "      - Chỉ cho phép SSH Key (An toàn tuyệt đối 100%)"
+        echo -e "      - ${RED}Yêu cầu:${NC} Bạn phải cài và test SSH Key thành công trước!"
+        echo -e "${CYAN}----------------------------------------------------${NC}"
+        echo -e "   ${YELLOW}0.${NC} Quay lại"
+        echo -e "${CYAN}====================================================${NC}"
+        
+        read -p " ➔ Chọn phương án (1/2/0): " choice
+        [[ "$choice" == "0" || -z "$choice" ]] && break
+
+        if [[ "$choice" == "1" ]]; then
+            echo -e "\n${RED}⚠ CẢNH BÁO: Bạn bắt buộc phải tạo User phụ có quyền sudo trước khi tiếp tục!${NC}"
+            echo -e "Nếu chưa tạo User phụ, khi tắt Root Login bạn sẽ không thể quản trị Server nữa."
+            read -p "Bạn đã có User phụ và sẵn sàng cấu hình? (y/N): " confirm_user
+            [[ ! "$confirm_user" =~ ^[Yy]$ ]] && continue
+
+            echo -e "\n${YELLOW}Đang cấu hình SSH mức độ Tiêu chuẩn...${NC}"
+            sudo cp "$SSHD_CONF" "${SSHD_CONF}.bak"
+
+            # Tắt Root Login, Bật Password, Bật Pubkey
+            sudo sed -i 's/^#*PermitRootLogin.*/PermitRootLogin no/g' "$SSHD_CONF"
+            sudo sed -i 's/^#*PasswordAuthentication.*/PasswordAuthentication yes/g' "$SSHD_CONF"
+            sudo sed -i 's/^#*PubkeyAuthentication.*/PubkeyAuthentication yes/g' "$SSHD_CONF"
+
+            # Tối ưu số lần thử nhập sai mật khẩu
+            if grep -q "^#*MaxAuthTries" "$SSHD_CONF"; then
+                sudo sed -i 's/^#*MaxAuthTries.*/MaxAuthTries 3/g' "$SSHD_CONF"
+            else
+                echo "MaxAuthTries 3" | sudo tee -a "$SSHD_CONF" >/dev/null
+            fi
+
+            # Tối ưu Timeout ngắt kết nối treo
+            if grep -q "^#*ClientAliveInterval" "$SSHD_CONF"; then
+                sudo sed -i 's/^#*ClientAliveInterval.*/ClientAliveInterval 300/g' "$SSHD_CONF"
+            else
+                echo "ClientAliveInterval 300" | sudo tee -a "$SSHD_CONF" >/dev/null
+            fi
+            if grep -q "^#*ClientAliveCountMax" "$SSHD_CONF"; then
+                sudo sed -i 's/^#*ClientAliveCountMax.*/ClientAliveCountMax 2/g' "$SSHD_CONF"
+            else
+                echo "ClientAliveCountMax 2" | sudo tee -a "$SSHD_CONF" >/dev/null
+            fi
+
+            # Khởi động lại dịch vụ SSH
+            if systemctl is-active --quiet sshd; then
+                sudo systemctl restart sshd
+            elif systemctl is-active --quiet ssh; then
+                sudo systemctl restart ssh
+            fi
+
+            echo -e "${GREEN}✔ Đã cấu hình bảo mật SSH tiêu chuẩn (Đã tắt Root Login, Vẫn giữ Password).${NC}"
+
+            # Cài đặt Fail2ban
+            read -p "Bạn có muốn cài Fail2ban để tự động chặn các IP dò mật khẩu không? (Y/n): " install_f2b
+            if [[ ! "$install_f2b" =~ ^[Nn]$ ]]; then
+                _setup_fail2ban
+            fi
+
+            echo -e "${YELLOW}Lưu ý: Không đóng màn hình SSH hiện tại cho đến khi bạn test login thành công bằng User phụ ở cửa sổ mới!${NC}"
+            echo ""; read -n 1 -s -r -p "Nhấn phím bất kỳ..."
+            break
+
+        elif [[ "$choice" == "2" ]]; then
+            echo -e "\n${RED}⚠ CẢNH BÁO NGUY HIỂM: BẠN CÓ THỂ BỊ KHÓA KHỎI SERVER!${NC}"
+            echo -e "Chức năng này sẽ tắt login bằng cả root lẫn mật khẩu (chỉ cho phép SSH Key)."
+            echo -e "Hãy chắc chắn rằng:"
+            echo -e " 1. Bạn đã có User phụ và đã cài SSH Key (đã giữ file Private Key)"
+            echo -e " 2. User phụ đó có quyền sudo/root"
+            read -p "Nhập chữ CHOT_DONE để đồng ý áp dụng Bảo mật Tối đa: " confirm_max
+            [[ "$confirm_max" != "CHOT_DONE" ]] && continue
+
+            echo -e "\n${YELLOW}Đang cấu hình SSH mức độ Tối đa...${NC}"
+            sudo cp "$SSHD_CONF" "${SSHD_CONF}.bak"
+
+            sudo sed -i 's/^#*PermitRootLogin.*/PermitRootLogin no/g' "$SSHD_CONF"
+            sudo sed -i 's/^#*PasswordAuthentication.*/PasswordAuthentication no/g' "$SSHD_CONF"
+            sudo sed -i 's/^#*PubkeyAuthentication.*/PubkeyAuthentication yes/g' "$SSHD_CONF"
+
+            # Tối ưu Timeout ngắt kết nối treo
+            if grep -q "^#*ClientAliveInterval" "$SSHD_CONF"; then
+                sudo sed -i 's/^#*ClientAliveInterval.*/ClientAliveInterval 300/g' "$SSHD_CONF"
+            else
+                echo "ClientAliveInterval 300" | sudo tee -a "$SSHD_CONF" >/dev/null
+            fi
+            if grep -q "^#*ClientAliveCountMax" "$SSHD_CONF"; then
+                sudo sed -i 's/^#*ClientAliveCountMax.*/ClientAliveCountMax 2/g' "$SSHD_CONF"
+            else
+                echo "ClientAliveCountMax 2" | sudo tee -a "$SSHD_CONF" >/dev/null
+            fi
+
+            # Khởi động lại dịch vụ SSH
+            if systemctl is-active --quiet sshd; then
+                sudo systemctl restart sshd
+            elif systemctl is-active --quiet ssh; then
+                sudo systemctl restart ssh
+            fi
+
+            echo -e "${GREEN}✔ Đã vô hiệu hóa login Root và Mật khẩu hoàn toàn (Chỉ cho dùng SSH Key).${NC}"
+            echo -e "${YELLOW}Lưu ý: Không đóng màn hình SSH hiện tại cho đến khi bạn test login thành công bằng SSH Key ở cửa sổ mới!${NC}"
+            echo ""; read -n 1 -s -r -p "Nhấn phím bất kỳ..."
+            break
+        fi
+    done
 }
 
 # ===== BẢO MẬT: MENU CHÍNH =====
@@ -1577,7 +1762,7 @@ security_menu() {
         echo -e "${YELLOW}               🛡️ BẢO MẬT HỆ THỐNG${NC}"
         echo -e "${CYAN}====================================================${NC}"
         echo -e "   ${YELLOW}1.${NC} Quản lý User (Thêm/Xóa/Đổi Pass/Cấp Sudo/Tạo SSH Key)"
-        echo -e "   ${YELLOW}2.${NC} Cấu hình Bảo mật SSH (Tắt login Root & Password)"
+        echo -e "   ${YELLOW}2.${NC} Cấu hình Bảo mật SSH (Root, Mật khẩu, Fail2ban)"
         echo -e "${CYAN}----------------------------------------------------${NC}"
         echo -e "   ${YELLOW}0.${NC} Quay lại Menu chính"
         echo -e "${CYAN}====================================================${NC}"
