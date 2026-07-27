@@ -1446,6 +1446,36 @@ docker_manage_container() {
     done
 }
 
+# ===== DOCKER: CẤP QUYỀN USER CHẠY DOCKER KHÔNG CẦN SUDO =====
+docker_add_user_permission() {
+    echo -e "\n${CYAN}--- CẤP QUYỀN CHẠY DOCKER KHÔNG CẦN SUDO ---${NC}"
+    if ! command -v docker >/dev/null 2>&1; then
+        echo -e "${RED}❌ Docker chưa được cài đặt. Vui lòng chọn mục 1 để cài đặt trước.${NC}"
+        return
+    fi
+
+    CURRENT_USER="${SUDO_USER:-$USER}"
+    echo -e "User hiện tại: ${YELLOW}$CURRENT_USER${NC}"
+    read -p "Nhập username cần cấp quyền Docker (Enter = '$CURRENT_USER'): " TARGET_USER
+    TARGET_USER=${TARGET_USER:-$CURRENT_USER}
+
+    if ! id "$TARGET_USER" >/dev/null 2>&1; then
+        echo -e "${RED}❌ User '$TARGET_USER' không tồn tại trên hệ thống!${NC}"
+        return
+    fi
+
+    echo -e "${YELLOW}Đang thêm user '$TARGET_USER' vào nhóm docker...${NC}"
+    sudo groupadd docker >/dev/null 2>&1 || true
+    sudo usermod -aG docker "$TARGET_USER"
+
+    if [ -e /var/run/docker.sock ]; then
+        sudo chmod 666 /var/run/docker.sock 2>/dev/null || true
+    fi
+
+    echo -e "${GREEN}✔ Đã thêm user '$TARGET_USER' vào nhóm docker thành công!${NC}"
+    echo -e "${YELLOW}ℹ Lưu ý:${NC} Hãy logout và login lại (hoặc chạy '${CYAN}newgrp docker${NC}') để thay đổi có hiệu lực."
+}
+
 # ===== DOCKER: MENU CHÍNH =====
 docker_menu() {
     while true; do
@@ -1468,6 +1498,7 @@ docker_menu() {
         echo -e "   ${YELLOW}2.${NC} Danh sách Container"
         echo -e "   ${YELLOW}3.${NC} Tạo Container mới (MySQL, Mongo, Redis...)"
         echo -e "   ${YELLOW}4.${NC} Quản lý Container (Start/Stop/Xóa/Logs)"
+        echo -e "   ${YELLOW}5.${NC} Cấp quyền chạy Docker không cần Sudo cho User"
         echo -e "${CYAN}----------------------------------------------------${NC}"
         echo -e "   ${YELLOW}0.${NC} Quay lại Menu chính"
         echo -e "${CYAN}====================================================${NC}"
@@ -1478,6 +1509,7 @@ docker_menu() {
             2) docker_list_containers; echo ""; read -n 1 -s -r -p "Nhấn phím bất kỳ..." ;;
             3) docker_create_container ;;
             4) docker_manage_container ;;
+            5) docker_add_user_permission; echo ""; read -n 1 -s -r -p "Nhấn phím bất kỳ..." ;;
             0) break ;;
             *) echo -e "${RED}❌ Không hợp lệ!${NC}"; sleep 1 ;;
         esac
