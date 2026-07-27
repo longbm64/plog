@@ -94,7 +94,7 @@ reload_frpc() {
         ensure_webserver_config
         echo -e "${YELLOW}⚠ Admin API (webServer) chưa được kích hoạt trong phiên chạy hiện tại.${NC}"
         echo -e "${YELLOW}  Cấu hình đã được lưu vào file. Thay đổi sẽ có hiệu lực khi:${NC}"
-        echo -e "   • Thoát SSH → Chọn mục ${CYAN}6${NC} để khởi chạy lại FRPC"
+        echo -e "   • Thoát SSH → Chọn mục ${CYAN}5${NC} để khởi chạy lại FRPC"
         echo -e "   • Hoặc chạy trực tiếp trên máy (không qua FRP SSH)"
         return
     fi
@@ -110,12 +110,12 @@ reload_frpc() {
         # Không kết nối được đến admin API → frpc đang chạy nhưng không có webServer
         echo -e "${YELLOW}⚠ Admin API chưa sẵn sàng (port 7400 chưa mở).${NC}"
         echo -e "${YELLOW}  Cấu hình đã được lưu vào file. Để áp dụng:${NC}"
-        echo -e "   • Thoát SSH → Chọn mục ${CYAN}6${NC} để khởi chạy lại FRPC"
+        echo -e "   • Thoát SSH → Chọn mục ${CYAN}5${NC} để khởi chạy lại FRPC"
     else
         echo -e "${RED}⚠ Hot-Reload trả về HTTP $RELOAD_OUT${NC}"
         echo -e "${YELLOW}Khắc phục:${NC}"
         echo -e "   • Kiểm tra config: ${CYAN}frpc verify -c \"$FRPC_CONF\"${NC}"
-        echo -e "   • Thoát SSH → Chọn mục ${CYAN}6${NC} để khởi chạy lại FRPC"
+        echo -e "   • Thoát SSH → Chọn mục ${CYAN}5${NC} để khởi chạy lại FRPC"
     fi
 }
 
@@ -127,7 +127,7 @@ test_connection() {
     SERVER_PORT=$(grep -E "^serverPort" "$FRPC_CONF" | awk '{print $3}')
 
     if [[ -z "$SERVER_IP" || -z "$SERVER_PORT" ]]; then
-        echo -e "${RED}❌ Chưa có thông tin IP/Port. Vui lòng cấu hình trước (Mục 5).${NC}"
+        echo -e "${RED}❌ Chưa có thông tin IP/Port. Vui lòng cấu hình trước (Mục 4).${NC}"
         return
     fi
 
@@ -580,11 +580,11 @@ EOL
 # ===== RUN FRPC =====
 run_frpc() {
     if ! command -v frpc >/dev/null 2>&1; then
-        echo -e "${RED}❌ Chưa cài đặt frpc. Vui lòng chọn mục 7.${NC}"
+        echo -e "${RED}❌ Chưa cài đặt frpc. Vui lòng chọn mục 3.${NC}"
         return
     fi
     if ! command -v pm2 >/dev/null 2>&1; then
-        echo -e "${RED}❌ Chưa cài đặt PM2. Vui lòng chọn mục 7.${NC}"
+        echo -e "${RED}❌ Chưa cài đặt PM2. Vui lòng chọn mục 2.${NC}"
         return
     fi
 
@@ -716,7 +716,7 @@ install_frp() {
     echo -e "\n${CYAN}--- CÀI ĐẶT FRPC CORE ---${NC}"
 
     if ! command -v pm2 >/dev/null 2>&1; then
-        echo -e "${RED}❌ Chưa cài đặt PM2. Vui lòng chọn mục 1 trước.${NC}"
+        echo -e "${RED}❌ Chưa cài đặt PM2. Vui lòng chọn mục 2 trước.${NC}"
         return
     fi
 
@@ -1777,11 +1777,68 @@ security_menu() {
     done
 }
 
+# ===== CẤU HÌNH MÚI GIỜ & THỜI GIAN =====
+config_timezone() {
+    echo -e "\n${CYAN}====================================================${NC}"
+    echo -e "${YELLOW}       ⏰ CẤU HÌNH MÚI GIỜ & THỜI GIAN (UTC+7)${NC}"
+    echo -e "${CYAN}====================================================${NC}"
+
+    echo -e "Thời gian hệ thống hiện tại:"
+    echo -e " ➔ ${YELLOW}$(date)${NC}"
+    echo -e " ➔ Múi giờ: ${CYAN}$(date +%Z) (UTC$(date +%z))${NC}\n"
+
+    read -p "Bạn có muốn chuyển sang múi giờ Việt Nam (Asia/Ho_Chi_Minh - UTC+7) và đồng bộ giờ chuẩn? (y/N): " choice
+    if [[ ! "$choice" =~ ^[Yy]$ ]]; then
+        return
+    fi
+
+    echo -e "\n${YELLOW}Đang thiết lập múi giờ Asia/Ho_Chi_Minh...${NC}"
+
+    if [[ "$(uname)" == "Linux" ]]; then
+        # Cập nhật timezone bằng timedatectl nếu có
+        if command -v timedatectl >/dev/null 2>&1; then
+            sudo timedatectl set-timezone Asia/Ho_Chi_Minh 2>/dev/null || true
+            sudo timedatectl set-ntp true 2>/dev/null || true
+        fi
+
+        # Symlink /etc/localtime dự phòng
+        if [ -f /usr/share/zoneinfo/Asia/Ho_Chi_Minh ]; then
+            sudo ln -sf /usr/share/zoneinfo/Asia/Ho_Chi_Minh /etc/localtime 2>/dev/null || true
+        fi
+
+        # Đồng bộ thời gian qua dịch vụ NTP / systemd-timesyncd / chrony / ntpdate
+        echo -e "${YELLOW}Đang đồng bộ thời gian từ máy chủ NTP...${NC}"
+        if systemctl is-active --quiet systemd-timesyncd 2>/dev/null; then
+            sudo systemctl restart systemd-timesyncd 2>/dev/null || true
+        elif systemctl is-active --quiet chrony 2>/dev/null || systemctl is-active --quiet chronyd 2>/dev/null; then
+            sudo systemctl restart chrony 2>/dev/null || sudo systemctl restart chronyd 2>/dev/null || true
+        elif command -v ntpdate >/dev/null 2>&1; then
+            sudo ntpdate -u pool.ntp.org >/dev/null 2>&1 || true
+        else
+            if command -v apt-get >/dev/null 2>&1; then
+                sudo apt-get update >/dev/null 2>&1
+                sudo apt-get install -y ntpdate systemd-timesyncd >/dev/null 2>&1 || true
+                sudo systemctl restart systemd-timesyncd 2>/dev/null || sudo ntpdate -u pool.ntp.org 2>/dev/null || true
+            elif command -v dnf >/dev/null 2>&1 || command -v yum >/dev/null 2>&1; then
+                sudo dnf install -y chrony >/dev/null 2>&1 || sudo yum install -y chrony >/dev/null 2>&1 || true
+                sudo systemctl enable --now chronyd 2>/dev/null || true
+            fi
+        fi
+    elif [[ "$(uname)" == "Darwin" ]]; then
+        sudo systemsetup -settimezone Asia/Ho_Chi_Minh 2>/dev/null || true
+        sudo sntp -sS time.apple.com 2>/dev/null || true
+    fi
+
+    echo -e "${GREEN}✔ Đã cập nhật thành công múi giờ Việt Nam (Asia/Ho_Chi_Minh - UTC+7)!${NC}"
+    echo -e "Thời gian hệ thống mới:"
+    echo -e " ➔ ${GREEN}$(date)${NC}"
+}
+
 # ===== SHOW MENU =====
 show_menu() {
     clear
     echo -e "${CYAN}====================================================${NC}"
-    echo -e "${YELLOW}      CÔNG CỤ QUẢN LÝ FRPC CLIENT - PHIÊN BẢN 0.2.6${NC}"
+    echo -e "${YELLOW}      CÔNG CỤ QUẢN LÝ FRPC CLIENT - PHIÊN BẢN 0.2.7${NC}"
     echo -e "${CYAN}====================================================${NC}"
     
     HAS_SERVER=$(grep -E "^serverAddr" "$FRPC_CONF" | cut -d'"' -f2)
@@ -1806,13 +1863,14 @@ show_menu() {
 
     echo -e "${CYAN}----------------------------------------------------${NC}"
     
-    echo -e "   ${YELLOW}1.${NC} Cài đặt Node.js & PM2"
-    echo -e "   ${YELLOW}2.${NC} Cài đặt FRPC Core"
-    echo -e "   ${YELLOW}3.${NC} Cấu hình FRPC"
-    echo -e "   ${YELLOW}4.${NC} Khởi động hoặc Restart FRPC (Có check kết nối)"
-    echo -e "   ${YELLOW}5.${NC} Quản lý Domain & Port"
-    echo -e "   ${YELLOW}6.${NC} Quản lý Docker & Container"
-    echo -e "   ${YELLOW}7.${NC} Bảo mật Hệ thống (User & SSH)"
+    echo -e "   ${YELLOW}1.${NC} Cấu hình Múi giờ & Đồng bộ Thời gian (UTC+7 Việt Nam)"
+    echo -e "   ${YELLOW}2.${NC} Cài đặt Node.js & PM2"
+    echo -e "   ${YELLOW}3.${NC} Cài đặt FRPC Core"
+    echo -e "   ${YELLOW}4.${NC} Cấu hình FRPC"
+    echo -e "   ${YELLOW}5.${NC} Khởi động hoặc Restart FRPC (Có check kết nối)"
+    echo -e "   ${YELLOW}6.${NC} Quản lý Domain & Port"
+    echo -e "   ${YELLOW}7.${NC} Quản lý Docker & Container"
+    echo -e "   ${YELLOW}8.${NC} Bảo mật Hệ thống (User & SSH)"
     echo -e "${CYAN}----------------------------------------------------${NC}"
     echo -e "   ${YELLOW}0.${NC} Thoát"
     echo -e "${CYAN}====================================================${NC}"
@@ -1824,13 +1882,14 @@ while true; do
     read -p " ➔ Nhập lựa chọn của bạn: " c
 
     case $c in
-        1) install_nodejs_pm2; echo ""; read -n 1 -s -r -p "Nhấn phím bất kỳ...";;
-        2) install_frp; echo ""; read -n 1 -s -r -p "Nhấn phím bất kỳ...";;
-        3) config_server; echo ""; read -n 1 -s -r -p "Nhấn phím bất kỳ...";;
-        4) run_frpc; test_connection; echo ""; read -n 1 -s -r -p "Nhấn phím bất kỳ...";;
-        5) domain_menu ;;
-        6) docker_menu ;;
-        7) security_menu ;;
+        1) config_timezone; echo ""; read -n 1 -s -r -p "Nhấn phím bất kỳ...";;
+        2) install_nodejs_pm2; echo ""; read -n 1 -s -r -p "Nhấn phím bất kỳ...";;
+        3) install_frp; echo ""; read -n 1 -s -r -p "Nhấn phím bất kỳ...";;
+        4) config_server; echo ""; read -n 1 -s -r -p "Nhấn phím bất kỳ...";;
+        5) run_frpc; test_connection; echo ""; read -n 1 -s -r -p "Nhấn phím bất kỳ...";;
+        6) domain_menu ;;
+        7) docker_menu ;;
+        8) security_menu ;;
         0) 
             echo -e "\n${GREEN}Tạm biệt! Chúc bạn dùng FRP vui vẻ.${NC}\n"
             exit 0 
