@@ -128,6 +128,9 @@ func StartDaemon(port string, secToken string) {
 	secureToken = secToken
 	http.HandleFunc("/api/connection-info", ConnectionInfoHandler)
 	http.HandleFunc("/check", CheckHandler)
+	http.HandleFunc("/api/cluster/join", ClusterJoinHandler)
+	http.HandleFunc("/api/cluster/peers", ClusterSyncPeersHandler)
+	http.HandleFunc("/api/cluster/sync-domain", ClusterSyncDomainHandler)
 
 	fmt.Printf("Starting NALink Server Daemon on 0.0.0.0:%s\n", port)
 	err := http.ListenAndServe(":"+port, nil)

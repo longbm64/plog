@@ -1,13 +1,18 @@
 package cli
 
 import (
-	"bufio"
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"strconv"
 	"strings"
+	"time"
+	"bytes"
+	"bufio"
 
 	"github.com/DangLong/na-server-go/pkg/caddy"
+	"github.com/DangLong/na-server-go/pkg/daemon"
 	"github.com/DangLong/na-server-go/pkg/frp"
 	"github.com/DangLong/na-server-go/pkg/utils"
 )
@@ -51,6 +56,19 @@ func getDaemonStatus() string {
 	return "\033[0;31mĐANG DỪNG\033[0m"
 }
 
+func getPeerCountAndList() (int, string) {
+	content, err := os.ReadFile("/etc/nalink/peers.json")
+	if err != nil {
+		return 0, ""
+	}
+	var peers []string
+	json.Unmarshal(content, &peers)
+	if len(peers) == 0 {
+		return 0, ""
+	}
+	return len(peers), strings.Join(peers, ", ")
+}
+
 func header() {
 	fmt.Print("\033[H\033[2J") // clear screen
 	fmt.Println("\033[1;36m")
@@ -62,51 +80,120 @@ func header() {
 	fmt.Println("\033[0m")
 	fmt.Printf("   Trạng thái FRPS: %s\n", getFRPSStatus())
 	fmt.Printf("   Trạng thái Caddy: %s\n", getCaddyStatus())
-	fmt.Printf("   Trạng thái API: %s\n\n", getDaemonStatus())
+	fmt.Printf("   Trạng thái API: %s\n", getDaemonStatus())
+	
+	count, _ := getPeerCountAndList()
+	if count > 0 {
+		fmt.Printf("   \033[0;35m[Cluster]: %d Nodes\033[0m\n\n", count)
+	} else {
+		fmt.Printf("   \033[0;90m[Cluster]: Đang chạy độc lập (Standalone)\033[0m\n\n")
+	}
 }
 
 func runInstallFRPS(reader *bufio.Reader) {
 	fmt.Println("\n\033[0;36m--- CAI DAT FRPS, CADDY & API DAEMON ---\033[0m")
 	
-	bPortDef, _ := utils.GetFreePort()
-	vPortDef, _ := utils.GetFreePort()
-	apiPortDef, _ := utils.GetFreePort()
+	fmt.Print("   Bạn có muốn Tham gia vào Cluster đã có? (y/N): ")
+	joinCluster, _ := reader.ReadString('\n')
+	joinCluster = strings.TrimSpace(strings.ToLower(joinCluster))
 
-	fmt.Printf("   Nhap FRP Bind Port (VD: 7000) [%d]: ", bPortDef)
-	bPort, _ := reader.ReadString('\n')
-	bPort = strings.TrimSpace(bPort)
-	if bPort == "" {
-		bPort = strconv.Itoa(bPortDef)
-	}
+	var bPort, vPort, token, apiPortStr, apiPass string
+	var bPortDef, vPortDef, apiPortDef int
 
-	fmt.Printf("   Nhap FRP Vhost HTTP Port (VD: 8080) [%d]: ", vPortDef)
-	vPort, _ := reader.ReadString('\n')
-	vPort = strings.TrimSpace(vPort)
-	if vPort == "" {
-		vPort = strconv.Itoa(vPortDef)
-	}
+	if joinCluster == "y" {
+		fmt.Print("   Nhập IP của VPS Master: ")
+		masterIP, _ := reader.ReadString('\n')
+		masterIP = strings.TrimSpace(masterIP)
 
-	fmt.Print("   Nhap FRP Auth Token [tu dong tao]: ")
-	token, _ := reader.ReadString('\n')
-	token = strings.TrimSpace(token)
-	if token == "" {
-		token, _ = utils.GenerateSecureToken(24)
-		fmt.Printf("   \033[0;33m[*] Tu dong tao Token: %s\033[0m\n", token)
-	}
+		fmt.Print("   Nhập API Port của Master [7400]: ")
+		masterPort, _ := reader.ReadString('\n')
+		masterPort = strings.TrimSpace(masterPort)
+		if masterPort == "" {
+			masterPort = "7400"
+		}
 
-	fmt.Printf("   Nhap Port cho API Daemon (VD: 7400) [%d]: ", apiPortDef)
-	apiPortStr, _ := reader.ReadString('\n')
-	apiPortStr = strings.TrimSpace(apiPortStr)
-	if apiPortStr == "" {
-		apiPortStr = strconv.Itoa(apiPortDef)
-	}
+		fmt.Print("   Nhập API Password của Master: ")
+		masterPass, _ := reader.ReadString('\n')
+		masterPass = strings.TrimSpace(masterPass)
 
-	fmt.Print("   Nhap Mat khau de Client ket noi API [tu dong tao]: ")
-	apiPass, _ := reader.ReadString('\n')
-	apiPass = strings.TrimSpace(apiPass)
-	if apiPass == "" {
-		apiPass, _ = utils.GenerateSecureToken(32)
-		fmt.Printf("   \033[0;33m[*] Tu dong tao Mat khau: %s\033[0m\n", apiPass)
+		apiPortStr = masterPort
+		apiPass = masterPass
+
+		myIPOut, _ := utils.ExecCmd("bash", "-c", "curl -s ifconfig.me")
+		myIP := strings.TrimSpace(myIPOut)
+		myURL := "http://" + myIP + ":" + apiPortStr
+
+		fmt.Println("   \033[0;33m>>> Đang kéo dữ liệu từ Master...\033[0m")
+		reqBody := daemon.JoinRequest{Password: masterPass, MyURL: myURL}
+		data, _ := json.Marshal(reqBody)
+		resp, err := http.Post("http://"+masterIP+":"+masterPort+"/api/cluster/join", "application/json", bytes.NewBuffer(data))
+		
+		if err != nil || resp.StatusCode != 200 {
+			fmt.Println("   \033[0;31m[ERR] Không thể kết nối tới Master, vui lòng kiểm tra lại IP/Password!\033[0m")
+			return
+		}
+
+		var joinRes daemon.JoinResponse
+		json.NewDecoder(resp.Body).Decode(&joinRes)
+
+		bPort = strconv.Itoa(joinRes.BindPort)
+		vPort = strconv.Itoa(joinRes.VhostPort)
+		token = joinRes.Token
+		
+		os.MkdirAll("/etc/caddy", 0755)
+		os.MkdirAll("/etc/nalink", 0755)
+		os.WriteFile("/etc/caddy/domains.txt", []byte(joinRes.Domains), 0644)
+		os.WriteFile("/etc/nalink/domain_ts", []byte(fmt.Sprintf("%d", joinRes.Timestamp)), 0644)
+		
+		peersData, _ := json.Marshal(joinRes.Peers)
+		os.WriteFile("/etc/nalink/peers.json", peersData, 0644)
+
+		fmt.Println("   \033[0;32m[OK] Đã kéo dữ liệu thành công!\033[0m")
+	} else {
+		bPortDef, _ = utils.GetFreePort()
+		vPortDef, _ = utils.GetFreePort()
+		apiPortDef, _ = utils.GetFreePort()
+
+		fmt.Printf("   Nhap FRP Bind Port (VD: 7000) [%d]: ", bPortDef)
+		bPort, _ = reader.ReadString('\n')
+		bPort = strings.TrimSpace(bPort)
+		if bPort == "" {
+			bPort = strconv.Itoa(bPortDef)
+		}
+
+		fmt.Printf("   Nhap FRP Vhost HTTP Port (VD: 8080) [%d]: ", vPortDef)
+		vPort, _ = reader.ReadString('\n')
+		vPort = strings.TrimSpace(vPort)
+		if vPort == "" {
+			vPort = strconv.Itoa(vPortDef)
+		}
+
+		fmt.Print("   Nhap FRP Auth Token [tu dong tao]: ")
+		token, _ = reader.ReadString('\n')
+		token = strings.TrimSpace(token)
+		if token == "" {
+			token, _ = utils.GenerateSecureToken(24)
+			fmt.Printf("   \033[0;33m[*] Tu dong tao Token: %s\033[0m\n", token)
+		}
+
+		fmt.Printf("   Nhap Port cho API Daemon (VD: 7400) [%d]: ", apiPortDef)
+		apiPortStr, _ = reader.ReadString('\n')
+		apiPortStr = strings.TrimSpace(apiPortStr)
+		if apiPortStr == "" {
+			apiPortStr = strconv.Itoa(apiPortDef)
+		}
+
+		fmt.Print("   Nhap Mat khau de Client ket noi API [tu dong tao]: ")
+		apiPass, _ = reader.ReadString('\n')
+		apiPass = strings.TrimSpace(apiPass)
+		if apiPass == "" {
+			apiPass, _ = utils.GenerateSecureToken(32)
+			fmt.Printf("   \033[0;33m[*] Tu dong tao Mat khau: %s\033[0m\n", apiPass)
+		}
+		
+		// Initialize empty peers
+		os.MkdirAll("/etc/nalink", 0755)
+		os.WriteFile("/etc/nalink/peers.json", []byte("[]"), 0644)
 	}
 
 	bPortInt, _ := strconv.Atoi(bPort)
@@ -124,7 +211,7 @@ func runInstallFRPS(reader *bufio.Reader) {
 	utils.ExecCmd("systemctl", "enable", "frps")
 	utils.ExecCmd("systemctl", "restart", "frps")
 
-	fmt.Println("\n\033[0;32m✅ CAI DAT FRPS HOAN TAT!\033[0m")
+	fmt.Println("\n\033[0;32m[OK] CAI DAT FRPS HOAN TAT!\033[0m")
 	fmt.Printf("   - Bind Port: \033[1;32m%s\033[0m\n", bPort)
 	fmt.Printf("   - Vhost Port: \033[1;32m%s\033[0m\n", vPort)
 	fmt.Printf("   - Token FRPS: \033[1;32m%s\033[0m\n", token)
@@ -158,6 +245,15 @@ func showConnectionInfo() {
 		fmt.Printf("       - Mật khẩu: \033[1;32m%s\033[0m\n", strings.TrimSpace(string(apiPass)))
 		fmt.Println("\n   \033[0;36m* Client co the POST toi http://<ip>:<port>/api/connection-info voi body { \"password\": \"...\" }\033[0m")
 	}
+
+	count, list := getPeerCountAndList()
+	if count > 0 {
+		fmt.Println("\n   \033[1;33m[3] Danh sach cac Node trong Cluster:\033[0m")
+		peers := strings.Split(list, ", ")
+		for i, peer := range peers {
+			fmt.Printf("       %d. \033[0;32m%s\033[0m\n", i+1, peer)
+		}
+	}
 }
 
 func manageDomains(reader *bufio.Reader) {
@@ -186,7 +282,7 @@ func manageDomains(reader *bufio.Reader) {
 		fmt.Println("   2. Xoa Domain")
 		fmt.Println("   3. Xoa TAT CA (Cho phep moi domain)")
 		fmt.Println("   0. Quay lai")
-		fmt.Print("\n   🔹 Xin moi chon (0-3): ")
+		fmt.Print("\n   >>> Xin moi chon (0-3): ")
 
 		input, _ := reader.ReadString('\n')
 		input = strings.TrimSpace(input)
@@ -198,8 +294,16 @@ func manageDomains(reader *bufio.Reader) {
 			newDomain = strings.TrimSpace(newDomain)
 			if newDomain != "" {
 				domains = append(domains, newDomain)
-				os.WriteFile("/etc/caddy/domains.txt", []byte(strings.Join(domains, "\n")+"\n"), 0644)
-				fmt.Println("   \033[0;32m✔ Đã thêm thành công!\033[0m")
+				domainsStr := strings.Join(domains, "\n") + "\n"
+				os.WriteFile("/etc/caddy/domains.txt", []byte(domainsStr), 0644)
+				
+				ts := time.Now().Unix()
+				os.WriteFile("/etc/nalink/domain_ts", []byte(fmt.Sprintf("%d", ts)), 0644)
+				
+				pass, _ := os.ReadFile("/etc/nalink/.token")
+				go daemon.BroadcastDomains(domainsStr, ts, strings.TrimSpace(string(pass)))
+				
+				fmt.Println("   \033[0;32m[OK] Đã thêm thành công!\033[0m")
 			}
 		case "2":
 			fmt.Print("   Nhập số thứ tự Domain cần xóa: ")
@@ -207,14 +311,28 @@ func manageDomains(reader *bufio.Reader) {
 			num, err := strconv.Atoi(strings.TrimSpace(numStr))
 			if err == nil && num > 0 && num <= len(domains) {
 				domains = append(domains[:num-1], domains[num:]...)
-				os.WriteFile("/etc/caddy/domains.txt", []byte(strings.Join(domains, "\n")+"\n"), 0644)
-				fmt.Println("   \033[0;32m✔ Đã xóa thành công!\033[0m")
+				domainsStr := strings.Join(domains, "\n") + "\n"
+				os.WriteFile("/etc/caddy/domains.txt", []byte(domainsStr), 0644)
+				
+				ts := time.Now().Unix()
+				os.WriteFile("/etc/nalink/domain_ts", []byte(fmt.Sprintf("%d", ts)), 0644)
+				
+				pass, _ := os.ReadFile("/etc/nalink/.token")
+				go daemon.BroadcastDomains(domainsStr, ts, strings.TrimSpace(string(pass)))
+				
+				fmt.Println("   \033[0;32m[OK] Đã xóa thành công!\033[0m")
 			} else {
-				fmt.Println("   \033[0;31m❌ Số thứ tự không hợp lệ!\033[0m")
+				fmt.Println("   \033[0;31m[ERR] Số thứ tự không hợp lệ!\033[0m")
 			}
 		case "3":
 			os.WriteFile("/etc/caddy/domains.txt", []byte(""), 0644)
-			fmt.Println("   \033[0;32m✔ Đã xóa toàn bộ danh sách!\033[0m")
+			ts := time.Now().Unix()
+			os.WriteFile("/etc/nalink/domain_ts", []byte(fmt.Sprintf("%d", ts)), 0644)
+			
+			pass, _ := os.ReadFile("/etc/nalink/.token")
+			go daemon.BroadcastDomains("", ts, strings.TrimSpace(string(pass)))
+			
+			fmt.Println("   \033[0;32m[OK] Đã xóa toàn bộ danh sách!\033[0m")
 		case "0", "":
 			return
 		}
@@ -229,7 +347,7 @@ func restartServices(reader *bufio.Reader) {
 		fmt.Println("   3. Khoi dong lai Caddy")
 		fmt.Println("   4. Khoi dong lai API Daemon")
 		fmt.Println("   0. Quay lai")
-		fmt.Print("\n   🔹 Xin moi chon (0-4): ")
+		fmt.Print("\n   >>> Xin moi chon (0-4): ")
 
 		input, _ := reader.ReadString('\n')
 		input = strings.TrimSpace(input)
@@ -240,23 +358,23 @@ func restartServices(reader *bufio.Reader) {
 			utils.ExecCmd("systemctl", "restart", "frps")
 			utils.ExecCmd("systemctl", "restart", "caddy")
 			utils.ExecCmd("systemctl", "restart", "na-server-daemon")
-			fmt.Println("   \033[0;32m✔ Da khoi dong lai hoan tat!\033[0m")
+			fmt.Println("   \033[0;32m[OK] Da khoi dong lai hoan tat!\033[0m")
 		case "2":
 			fmt.Println("   \033[0;33m>>> Dang khoi dong lai FRPS...\033[0m")
 			utils.ExecCmd("systemctl", "restart", "frps")
-			fmt.Println("   \033[0;32m✔ Hoan tat!\033[0m")
+			fmt.Println("   \033[0;32m[OK] Hoan tat!\033[0m")
 		case "3":
 			fmt.Println("   \033[0;33m>>> Dang khoi dong lai Caddy...\033[0m")
 			utils.ExecCmd("systemctl", "restart", "caddy")
-			fmt.Println("   \033[0;32m✔ Hoan tat!\033[0m")
+			fmt.Println("   \033[0;32m[OK] Hoan tat!\033[0m")
 		case "4":
 			fmt.Println("   \033[0;33m>>> Dang khoi dong lai API Daemon...\033[0m")
 			utils.ExecCmd("systemctl", "restart", "na-server-daemon")
-			fmt.Println("   \033[0;32m✔ Hoan tat!\033[0m")
+			fmt.Println("   \033[0;32m[OK] Hoan tat!\033[0m")
 		case "0", "":
 			return
 		default:
-			fmt.Println("   \033[0;31m❌ Lua chon khong hop le!\033[0m")
+			fmt.Println("   \033[0;31m[ERR] Lua chon khong hop le!\033[0m")
 		}
 	}
 }
@@ -278,7 +396,7 @@ func ShowMenu() {
 		fmt.Println("   4. Khoi dong lai cac dich vu")
 		fmt.Println("   0. Thoat")
 		fmt.Println("")
-		fmt.Print("   🔹 Xin moi chon (0-4): ")
+		fmt.Print("   >>> Xin moi chon (0-4): ")
 
 		input, _ := reader.ReadString('\n')
 		input = strings.TrimSpace(input)
@@ -293,12 +411,12 @@ func ShowMenu() {
 		case "4":
 			restartServices(reader)
 		case "0":
-			fmt.Println("   👋 Tam biet!")
+			fmt.Println("   [BYE] Tam biet!")
 			return
 		case "":
 			continue
 		default:
-			fmt.Println("❌ Lua chon khong hop le, vui long thu lai.")
+			fmt.Println("[ERR] Lua chon khong hop le, vui long thu lai.")
 		}
 
 		fmt.Print("\n(Nhan phim Enter de tiep tuc...)")
