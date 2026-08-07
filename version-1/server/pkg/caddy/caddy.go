@@ -51,14 +51,31 @@ func InstallCaddy(apiPort, vhostPort int, secToken string) error {
     }
 }
 
-:80, :443 {
+:443 {
     tls {
         on_demand
     }
 
     handle {
-        reverse_proxy 127.0.0.1:%d
+        reverse_proxy 127.0.0.1:%d {
+            @error status 404 502
+            handle_response @error {
+                root * /var/www/html
+                rewrite * /404.html
+                file_server
+            }
+        }
     }
+
+    handle_errors {
+        root * /var/www/html
+        rewrite * /404.html
+        file_server
+    }
+}
+
+:80 {
+    redir https://{host}{uri} permanent
 }
 `, apiPort, vhostPort)
 
